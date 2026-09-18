@@ -18,7 +18,8 @@
 //! tls.peer.subject       CN=partner-x.example,O=Partner X   the claim
 //! tls.peer.issuer        CN=Partner CA,O=Partner X          evidence
 //! tls.peer.fingerprint   SHA256:ab12…                        evidence
-//! tls.peer.chain         PEM, leaf first                     proof certificate.chain
+//! tls.peer.upn           jane@partner-x.example              evidence principal.user
+//! tls.peer.chain        PEM, leaf first                     proof certificate.chain
 //! tls.peer.verified      verified                            proof mutual-tls.handshake
 //! ```
 //!
@@ -29,12 +30,26 @@
 //! the claim is `certificate` and its proof is the chain for the second gate
 //! to walk (ADR-0033 clause 1, amended 2026-09-18).
 //!
+//! A smart-card certificate carries a user principal name as a subjectAltName
+//! otherName, OID 1.3.6.1.4.1.311.20.2.3. This crate parses no X.509: the
+//! transport that does promotes the name as `tls.peer.upn`, and where that is
+//! a user principal name it is written as `principal.user` in the
+//! capability's canonical form, beside the subject, which stays the value
+//! (ADR-0054). Where it is absent, or is not one, nothing is added.
+//!
 //! Only a pushed arrival carries a passed claim. Where Xmip went and fetched
 //! the Stream, or found it waiting, the certificate in play was Xmip's own and
 //! says nothing about the source.
 
-use identify::{IdentifyError, Presented, StreamArrival, TransportIdentifier};
+use identify::{
+    IdentifyError, Presented, StreamArrival, TransportIdentifier, UserPrincipalName, principal,
+};
 use xcore::{Arriving, Mechanism};
+
+/// The property carrying the user principal name a smart-card certificate
+/// holds as a subjectAltName otherName, OID 1.3.6.1.4.1.311.20.2.3, read out
+/// by the transport.
+pub const UPN: &str = "tls.peer.upn";
 
 /// The property carrying the subject distinguished name.
 pub const SUBJECT: &str = "tls.peer.subject";
@@ -72,7 +87,7 @@ impl TransportIdentifier for Certificate {
 
         let subject = match arrival.property(SUBJECT) {
             Some(subject) => subject.trim(),
-            None if [ISSUER, FINGERPRINT, CHAIN]
+            None if [ISSUER, FINGERPRINT, CHAIN, UPN]
                 .iter()
                 .any(|name| arrival.property(name).is_some()) =>
             {
@@ -102,6 +117,9 @@ impl TransportIdentifier for Certificate {
         }
         if let Some(fingerprint) = arrival.property(FINGERPRINT) {
             claim = claim.with_evidence(FINGERPRINT, fingerprint.trim());
+        }
+        if let Some(name) = arrival.property(UPN).and_then(UserPrincipalName::parse) {
+            claim = claim.with_evidence(principal::USER, name.to_string());
         }
         if let Some(chain) = arrival.property(CHAIN) {
             if !chain.contains(PEM_HEADER) {
@@ -198,6 +216,50 @@ mod tests {
         assert_eq!(claim.value, "CN=partner-x.example");
         assert_eq!(claim.proof(HANDSHAKE_PROOF), Some("verified"));
         assert_eq!(claim.proof(CHAIN_PROOF), Some(CHAIN_PEM));
+    }
+
+    #[test]
+    fn a_smart_card_certificates_principal_name_is_written_in_canonical_form() {
+        let stream = stream();
+        let mut properties = properties(false);
+        properties.push((UPN.to_string(), "Jane@Partner-X.Example".to_string()));
+        let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
+
+        let claim = Certificate
+            .identify(&arrival)
+            .expect("read")
+            .expect("a claim");
+
+        assert_eq!(claim.value, "CN=partner-x.example", "the subject stands");
+        assert!(claim.evidence.contains(&(
+            principal::USER.to_string(),
+            "Jane@partner-x.example".to_string()
+        )));
+    }
+
+    #[test]
+    fn an_alternative_name_that_is_not_a_principal_name_and_a_subject_add_no_such_evidence() {
+        let stream = stream();
+        let plain = properties(false);
+        let mut bare = properties(false);
+        bare.push((UPN.to_string(), "jane".to_string()));
+
+        for properties in [plain, bare] {
+            let arrival =
+                StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
+
+            let claim = Certificate
+                .identify(&arrival)
+                .expect("read")
+                .expect("a claim");
+
+            assert!(
+                claim
+                    .evidence
+                    .iter()
+                    .all(|(name, _)| name != principal::USER)
+            );
+        }
     }
 
     #[test]
