@@ -19,7 +19,15 @@
 //! tls.peer.issuer        CN=Partner CA,O=Partner X          evidence
 //! tls.peer.fingerprint   SHA256:ab12…                        evidence
 //! tls.peer.chain         PEM, leaf first                     proof certificate.chain
+//! tls.peer.verified      verified                            proof mutual-tls.handshake
 //! ```
+//!
+//! Two mechanisms come off this one reading, because only the transport
+//! knows which it is: where the handshake itself verified the chain the
+//! transport says so in `tls.peer.verified`, the claim is `mutual-tls` and
+//! its proof is the transport's word; where the certificate merely arrived,
+//! the claim is `certificate` and its proof is the chain for the second gate
+//! to walk (ADR-0033 clause 1, amended 2026-09-18).
 //!
 //! Only a pushed arrival carries a passed claim. Where Xmip went and fetched
 //! the Stream, or found it waiting, the certificate in play was Xmip's own and
@@ -38,6 +46,13 @@ pub const FINGERPRINT: &str = "tls.peer.fingerprint";
 pub const CHAIN: &str = "tls.peer.chain";
 /// The proof name the chain rides under, read by `authenticate/certificate`.
 pub const CHAIN_PROOF: &str = "certificate.chain";
+
+/// The property the transport promotes when its handshake verified the chain.
+pub const VERIFIED: &str = "tls.peer.verified";
+
+/// The proof name the transport's word rides under, read by
+/// `authenticate/mutual-tls`.
+pub const HANDSHAKE_PROOF: &str = "mutual-tls.handshake";
 
 const PEM_HEADER: &str = "-----BEGIN CERTIFICATE-----";
 
@@ -73,7 +88,15 @@ impl TransportIdentifier for Certificate {
             ));
         }
 
-        let mut claim = Presented::passed(self.mechanism(), subject);
+        let handshake = arrival.property(VERIFIED).map(str::trim);
+        let mechanism = match handshake {
+            Some(_) => xcore::mechanism::mutual_tls(),
+            None => self.mechanism(),
+        };
+        let mut claim = Presented::passed(mechanism, subject);
+        if let Some(word) = handshake {
+            claim = claim.with_proof(HANDSHAKE_PROOF, word);
+        }
         if let Some(issuer) = arrival.property(ISSUER) {
             claim = claim.with_evidence(ISSUER, issuer.trim());
         }
@@ -157,6 +180,24 @@ mod tests {
 
         assert_eq!(claim.proof(CHAIN_PROOF), Some(CHAIN_PEM));
         assert!(claim.evidence.iter().all(|(name, _)| name != CHAIN));
+    }
+
+    #[test]
+    fn a_chain_the_handshake_verified_is_mutual_tls_with_the_transports_word_as_proof() {
+        let stream = stream();
+        let mut properties = properties(true);
+        properties.push((VERIFIED.to_string(), "verified".to_string()));
+        let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
+
+        let claim = Certificate
+            .identify(&arrival)
+            .expect("read")
+            .expect("a claim");
+
+        assert_eq!(claim.mechanism.name(), "mutual-tls");
+        assert_eq!(claim.value, "CN=partner-x.example");
+        assert_eq!(claim.proof(HANDSHAKE_PROOF), Some("verified"));
+        assert_eq!(claim.proof(CHAIN_PROOF), Some(CHAIN_PEM));
     }
 
     #[test]
