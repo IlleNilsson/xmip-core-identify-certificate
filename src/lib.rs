@@ -41,22 +41,13 @@
 //! the Stream, or found it waiting, the certificate in play was Xmip's own and
 //! says nothing about the source.
 
+use context::property::{
+    TLS_PEER_CHAIN, TLS_PEER_FINGERPRINT, TLS_PEER_ISSUER, TLS_PEER_SUBJECT, TLS_PEER_UPN,
+    TLS_PEER_VERIFIED,
+};
 use identify::evidence;
 use identify::{IdentifyError, Presented, StreamArrival, TransportIdentifier, UserPrincipalName};
 use xcore::{Arriving, Mechanism};
-
-/// The property carrying the user principal name a smart-card certificate
-/// holds as a subjectAltName otherName, OID 1.3.6.1.4.1.311.20.2.3, read out
-/// by the transport.
-pub const UPN: &str = "tls.peer.upn";
-
-/// The property carrying the subject distinguished name.
-pub const SUBJECT: &str = "tls.peer.subject";
-/// The property carrying the chain the peer sent, as PEM, leaf first.
-pub const CHAIN: &str = "tls.peer.chain";
-
-/// The property the transport promotes when its handshake verified the chain.
-pub const VERIFIED: &str = "tls.peer.verified";
 
 const PEM_HEADER: &str = "-----BEGIN CERTIFICATE-----";
 
@@ -74,13 +65,13 @@ impl TransportIdentifier for Certificate {
             return Ok(None);
         }
 
-        let subject = match arrival.property(SUBJECT) {
+        let subject = match arrival.property(TLS_PEER_SUBJECT) {
             Some(subject) => subject.trim(),
             None if [
-                evidence::TLS_PEER_ISSUER,
-                evidence::TLS_PEER_FINGERPRINT,
-                CHAIN,
-                UPN,
+                TLS_PEER_ISSUER,
+                TLS_PEER_FINGERPRINT,
+                TLS_PEER_CHAIN,
+                TLS_PEER_UPN,
             ]
             .iter()
             .any(|name| arrival.property(name).is_some()) =>
@@ -97,7 +88,7 @@ impl TransportIdentifier for Certificate {
             ));
         }
 
-        let handshake = arrival.property(VERIFIED).map(str::trim);
+        let handshake = arrival.property(TLS_PEER_VERIFIED).map(str::trim);
         let mechanism = match handshake {
             Some(_) => xcore::mechanism::mutual_tls(),
             None => self.mechanism(),
@@ -106,16 +97,19 @@ impl TransportIdentifier for Certificate {
         if let Some(word) = handshake {
             claim = claim.with_proof(evidence::MUTUAL_TLS_HANDSHAKE, word);
         }
-        if let Some(issuer) = arrival.property(evidence::TLS_PEER_ISSUER) {
-            claim = claim.with_evidence(evidence::TLS_PEER_ISSUER, issuer.trim());
+        if let Some(issuer) = arrival.property(TLS_PEER_ISSUER) {
+            claim = claim.with_evidence(TLS_PEER_ISSUER, issuer.trim());
         }
-        if let Some(fingerprint) = arrival.property(evidence::TLS_PEER_FINGERPRINT) {
-            claim = claim.with_evidence(evidence::TLS_PEER_FINGERPRINT, fingerprint.trim());
+        if let Some(fingerprint) = arrival.property(TLS_PEER_FINGERPRINT) {
+            claim = claim.with_evidence(TLS_PEER_FINGERPRINT, fingerprint.trim());
         }
-        if let Some(name) = arrival.property(UPN).and_then(UserPrincipalName::parse) {
+        if let Some(name) = arrival
+            .property(TLS_PEER_UPN)
+            .and_then(UserPrincipalName::parse)
+        {
             claim = claim.with_evidence(evidence::PRINCIPAL_USER, name.to_string());
         }
-        if let Some(chain) = arrival.property(CHAIN) {
+        if let Some(chain) = arrival.property(TLS_PEER_CHAIN) {
             if !chain.contains(PEM_HEADER) {
                 return Err(IdentifyError::new(
                     "the peer certificate chain is not PEM: no CERTIFICATE block",
@@ -142,18 +136,15 @@ mod tests {
 
     fn properties(with_chain: bool) -> Vec<(String, String)> {
         let mut properties = vec![
-            (SUBJECT.to_string(), "CN=partner-x.example".to_string()),
             (
-                evidence::TLS_PEER_ISSUER.to_string(),
-                "CN=Partner CA".to_string(),
+                TLS_PEER_SUBJECT.to_string(),
+                "CN=partner-x.example".to_string(),
             ),
-            (
-                evidence::TLS_PEER_FINGERPRINT.to_string(),
-                "SHA256:ab12".to_string(),
-            ),
+            (TLS_PEER_ISSUER.to_string(), "CN=Partner CA".to_string()),
+            (TLS_PEER_FINGERPRINT.to_string(), "SHA256:ab12".to_string()),
         ];
         if with_chain {
-            properties.push((CHAIN.to_string(), CHAIN_PEM.to_string()));
+            properties.push((TLS_PEER_CHAIN.to_string(), CHAIN_PEM.to_string()));
         }
         properties
     }
@@ -173,14 +164,16 @@ mod tests {
         assert_eq!(claim.established, Established::Passed);
         assert_eq!(claim.layer(), Layer::Transport);
         assert_eq!(claim.mechanism.name(), "certificate");
-        assert!(claim.evidence.contains(&(
-            evidence::TLS_PEER_ISSUER.to_string(),
-            "CN=Partner CA".to_string()
-        )));
-        assert!(claim.evidence.contains(&(
-            evidence::TLS_PEER_FINGERPRINT.to_string(),
-            "SHA256:ab12".to_string()
-        )));
+        assert!(
+            claim
+                .evidence
+                .contains(&(TLS_PEER_ISSUER.to_string(), "CN=Partner CA".to_string()))
+        );
+        assert!(
+            claim
+                .evidence
+                .contains(&(TLS_PEER_FINGERPRINT.to_string(), "SHA256:ab12".to_string()))
+        );
     }
 
     #[test]
@@ -195,14 +188,19 @@ mod tests {
             .expect("a claim");
 
         assert_eq!(claim.proof(evidence::CERTIFICATE_CHAIN), Some(CHAIN_PEM));
-        assert!(claim.evidence.iter().all(|(name, _)| name != CHAIN));
+        assert!(
+            claim
+                .evidence
+                .iter()
+                .all(|(name, _)| name != TLS_PEER_CHAIN)
+        );
     }
 
     #[test]
     fn a_chain_the_handshake_verified_is_mutual_tls_with_the_transports_word_as_proof() {
         let stream = stream();
         let mut properties = properties(true);
-        properties.push((VERIFIED.to_string(), "verified".to_string()));
+        properties.push((TLS_PEER_VERIFIED.to_string(), "verified".to_string()));
         let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
 
         let claim = Certificate
@@ -223,7 +221,10 @@ mod tests {
     fn a_smart_card_certificates_principal_name_is_written_in_canonical_form() {
         let stream = stream();
         let mut properties = properties(false);
-        properties.push((UPN.to_string(), "Jane@Partner-X.Example".to_string()));
+        properties.push((
+            TLS_PEER_UPN.to_string(),
+            "Jane@Partner-X.Example".to_string(),
+        ));
         let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
 
         let claim = Certificate
@@ -243,7 +244,7 @@ mod tests {
         let stream = stream();
         let plain = properties(false);
         let mut bare = properties(false);
-        bare.push((UPN.to_string(), "jane".to_string()));
+        bare.push((TLS_PEER_UPN.to_string(), "jane".to_string()));
 
         for properties in [plain, bare] {
             let arrival =
@@ -276,7 +277,7 @@ mod tests {
     fn a_chain_that_is_not_pem_is_an_error_naming_why() {
         let stream = stream();
         let mut properties = properties(false);
-        properties.push((CHAIN.to_string(), "MIIB".to_string()));
+        properties.push((TLS_PEER_CHAIN.to_string(), "MIIB".to_string()));
         let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
 
         let failure = Certificate.identify(&arrival).expect_err("not PEM");
@@ -287,10 +288,7 @@ mod tests {
     #[test]
     fn a_certificate_reported_without_its_subject_is_an_error_and_not_an_absence() {
         let stream = stream();
-        let properties = [(
-            evidence::TLS_PEER_FINGERPRINT.to_string(),
-            "SHA256:ab12".to_string(),
-        )];
+        let properties = [(TLS_PEER_FINGERPRINT.to_string(), "SHA256:ab12".to_string())];
         let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
 
         let failure = Certificate.identify(&arrival).expect_err("no subject");
