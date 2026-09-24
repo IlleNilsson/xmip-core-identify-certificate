@@ -41,9 +41,8 @@
 //! the Stream, or found it waiting, the certificate in play was Xmip's own and
 //! says nothing about the source.
 
-use identify::{
-    IdentifyError, Presented, StreamArrival, TransportIdentifier, UserPrincipalName, principal,
-};
+use identify::evidence;
+use identify::{IdentifyError, Presented, StreamArrival, TransportIdentifier, UserPrincipalName};
 use xcore::{Arriving, Mechanism};
 
 /// The property carrying the user principal name a smart-card certificate
@@ -53,21 +52,11 @@ pub const UPN: &str = "tls.peer.upn";
 
 /// The property carrying the subject distinguished name.
 pub const SUBJECT: &str = "tls.peer.subject";
-/// The property carrying the issuer distinguished name.
-pub const ISSUER: &str = "tls.peer.issuer";
-/// The property carrying the certificate's fingerprint, `SHA256:` first.
-pub const FINGERPRINT: &str = "tls.peer.fingerprint";
 /// The property carrying the chain the peer sent, as PEM, leaf first.
 pub const CHAIN: &str = "tls.peer.chain";
-/// The proof name the chain rides under, read by `authenticate/certificate`.
-pub const CHAIN_PROOF: &str = "certificate.chain";
 
 /// The property the transport promotes when its handshake verified the chain.
 pub const VERIFIED: &str = "tls.peer.verified";
-
-/// The proof name the transport's word rides under, read by
-/// `authenticate/mutual-tls`.
-pub const HANDSHAKE_PROOF: &str = "mutual-tls.handshake";
 
 const PEM_HEADER: &str = "-----BEGIN CERTIFICATE-----";
 
@@ -87,9 +76,14 @@ impl TransportIdentifier for Certificate {
 
         let subject = match arrival.property(SUBJECT) {
             Some(subject) => subject.trim(),
-            None if [ISSUER, FINGERPRINT, CHAIN, UPN]
-                .iter()
-                .any(|name| arrival.property(name).is_some()) =>
+            None if [
+                evidence::TLS_PEER_ISSUER,
+                evidence::TLS_PEER_FINGERPRINT,
+                CHAIN,
+                UPN,
+            ]
+            .iter()
+            .any(|name| arrival.property(name).is_some()) =>
             {
                 return Err(IdentifyError::new(
                     "the transport reported a peer certificate without its subject",
@@ -110,16 +104,16 @@ impl TransportIdentifier for Certificate {
         };
         let mut claim = Presented::passed(mechanism, subject);
         if let Some(word) = handshake {
-            claim = claim.with_proof(HANDSHAKE_PROOF, word);
+            claim = claim.with_proof(evidence::MUTUAL_TLS_HANDSHAKE, word);
         }
-        if let Some(issuer) = arrival.property(ISSUER) {
-            claim = claim.with_evidence(ISSUER, issuer.trim());
+        if let Some(issuer) = arrival.property(evidence::TLS_PEER_ISSUER) {
+            claim = claim.with_evidence(evidence::TLS_PEER_ISSUER, issuer.trim());
         }
-        if let Some(fingerprint) = arrival.property(FINGERPRINT) {
-            claim = claim.with_evidence(FINGERPRINT, fingerprint.trim());
+        if let Some(fingerprint) = arrival.property(evidence::TLS_PEER_FINGERPRINT) {
+            claim = claim.with_evidence(evidence::TLS_PEER_FINGERPRINT, fingerprint.trim());
         }
         if let Some(name) = arrival.property(UPN).and_then(UserPrincipalName::parse) {
-            claim = claim.with_evidence(principal::USER, name.to_string());
+            claim = claim.with_evidence(evidence::PRINCIPAL_USER, name.to_string());
         }
         if let Some(chain) = arrival.property(CHAIN) {
             if !chain.contains(PEM_HEADER) {
@@ -127,7 +121,7 @@ impl TransportIdentifier for Certificate {
                     "the peer certificate chain is not PEM: no CERTIFICATE block",
                 ));
             }
-            claim = claim.with_proof(CHAIN_PROOF, chain);
+            claim = claim.with_proof(evidence::CERTIFICATE_CHAIN, chain);
         }
 
         Ok(Some(claim))
@@ -149,8 +143,14 @@ mod tests {
     fn properties(with_chain: bool) -> Vec<(String, String)> {
         let mut properties = vec![
             (SUBJECT.to_string(), "CN=partner-x.example".to_string()),
-            (ISSUER.to_string(), "CN=Partner CA".to_string()),
-            (FINGERPRINT.to_string(), "SHA256:ab12".to_string()),
+            (
+                evidence::TLS_PEER_ISSUER.to_string(),
+                "CN=Partner CA".to_string(),
+            ),
+            (
+                evidence::TLS_PEER_FINGERPRINT.to_string(),
+                "SHA256:ab12".to_string(),
+            ),
         ];
         if with_chain {
             properties.push((CHAIN.to_string(), CHAIN_PEM.to_string()));
@@ -173,16 +173,14 @@ mod tests {
         assert_eq!(claim.established, Established::Passed);
         assert_eq!(claim.layer(), Layer::Transport);
         assert_eq!(claim.mechanism.name(), "certificate");
-        assert!(
-            claim
-                .evidence
-                .contains(&(ISSUER.to_string(), "CN=Partner CA".to_string()))
-        );
-        assert!(
-            claim
-                .evidence
-                .contains(&(FINGERPRINT.to_string(), "SHA256:ab12".to_string()))
-        );
+        assert!(claim.evidence.contains(&(
+            evidence::TLS_PEER_ISSUER.to_string(),
+            "CN=Partner CA".to_string()
+        )));
+        assert!(claim.evidence.contains(&(
+            evidence::TLS_PEER_FINGERPRINT.to_string(),
+            "SHA256:ab12".to_string()
+        )));
     }
 
     #[test]
@@ -196,7 +194,7 @@ mod tests {
             .expect("read")
             .expect("a claim");
 
-        assert_eq!(claim.proof(CHAIN_PROOF), Some(CHAIN_PEM));
+        assert_eq!(claim.proof(evidence::CERTIFICATE_CHAIN), Some(CHAIN_PEM));
         assert!(claim.evidence.iter().all(|(name, _)| name != CHAIN));
     }
 
@@ -214,8 +212,11 @@ mod tests {
 
         assert_eq!(claim.mechanism.name(), "mutual-tls");
         assert_eq!(claim.value, "CN=partner-x.example");
-        assert_eq!(claim.proof(HANDSHAKE_PROOF), Some("verified"));
-        assert_eq!(claim.proof(CHAIN_PROOF), Some(CHAIN_PEM));
+        assert_eq!(
+            claim.proof(evidence::MUTUAL_TLS_HANDSHAKE),
+            Some("verified")
+        );
+        assert_eq!(claim.proof(evidence::CERTIFICATE_CHAIN), Some(CHAIN_PEM));
     }
 
     #[test]
@@ -232,7 +233,7 @@ mod tests {
 
         assert_eq!(claim.value, "CN=partner-x.example", "the subject stands");
         assert!(claim.evidence.contains(&(
-            principal::USER.to_string(),
+            evidence::PRINCIPAL_USER.to_string(),
             "Jane@partner-x.example".to_string()
         )));
     }
@@ -257,7 +258,7 @@ mod tests {
                 claim
                     .evidence
                     .iter()
-                    .all(|(name, _)| name != principal::USER)
+                    .all(|(name, _)| name != evidence::PRINCIPAL_USER)
             );
         }
     }
@@ -286,7 +287,10 @@ mod tests {
     #[test]
     fn a_certificate_reported_without_its_subject_is_an_error_and_not_an_absence() {
         let stream = stream();
-        let properties = [(FINGERPRINT.to_string(), "SHA256:ab12".to_string())];
+        let properties = [(
+            evidence::TLS_PEER_FINGERPRINT.to_string(),
+            "SHA256:ab12".to_string(),
+        )];
         let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
 
         let failure = Certificate.identify(&arrival).expect_err("no subject");
