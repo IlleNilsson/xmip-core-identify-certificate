@@ -15,10 +15,10 @@
 //! transport that terminates TLS:
 //!
 //! ```text
-//! tls.peer.subject       CN=partner-x.example,O=Partner X   the claim
-//! tls.peer.issuer        CN=Partner CA,O=Partner X          evidence
+//! tls.peer.subject       CN=party-x.example,O=Party X   the claim
+//! tls.peer.issuer        CN=Party CA,O=Party X          evidence
 //! tls.peer.fingerprint   SHA256:ab12…                        evidence
-//! tls.peer.upn           jane@partner-x.example              evidence principal.user
+//! tls.peer.upn           jane@party-x.example              evidence principal.user
 //! tls.peer.chain        PEM, leaf first                     proof certificate.chain
 //! tls.peer.verified      verified                            proof mutual-tls.handshake
 //! ```
@@ -138,9 +138,9 @@ mod tests {
         let mut properties = vec![
             (
                 TLS_PEER_SUBJECT.to_string(),
-                "CN=partner-x.example".to_string(),
+                "CN=party-x.example".to_string(),
             ),
-            (TLS_PEER_ISSUER.to_string(), "CN=Partner CA".to_string()),
+            (TLS_PEER_ISSUER.to_string(), "CN=Party CA".to_string()),
             (TLS_PEER_FINGERPRINT.to_string(), "SHA256:ab12".to_string()),
         ];
         if with_chain {
@@ -160,14 +160,14 @@ mod tests {
             .expect("read")
             .expect("a claim");
 
-        assert_eq!(claim.value, "CN=partner-x.example");
+        assert_eq!(claim.value, "CN=party-x.example");
         assert_eq!(claim.established, Established::Passed);
         assert_eq!(claim.layer(), Layer::Transport);
         assert_eq!(claim.mechanism.name(), "certificate");
         assert!(
             claim
                 .evidence
-                .contains(&(TLS_PEER_ISSUER.to_string(), "CN=Partner CA".to_string()))
+                .contains(&(TLS_PEER_ISSUER.to_string(), "CN=Party CA".to_string()))
         );
         assert!(
             claim
@@ -209,7 +209,7 @@ mod tests {
             .expect("a claim");
 
         assert_eq!(claim.mechanism.name(), "mutual-tls");
-        assert_eq!(claim.value, "CN=partner-x.example");
+        assert_eq!(claim.value, "CN=party-x.example");
         assert_eq!(
             claim.proof(evidence::MUTUAL_TLS_HANDSHAKE),
             Some("verified")
@@ -221,10 +221,7 @@ mod tests {
     fn a_smart_card_certificates_principal_name_is_written_in_canonical_form() {
         let stream = stream();
         let mut properties = properties(false);
-        properties.push((
-            TLS_PEER_UPN.to_string(),
-            "Jane@Partner-X.Example".to_string(),
-        ));
+        properties.push((TLS_PEER_UPN.to_string(), "Jane@Party-X.Example".to_string()));
         let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
 
         let claim = Certificate
@@ -232,10 +229,10 @@ mod tests {
             .expect("read")
             .expect("a claim");
 
-        assert_eq!(claim.value, "CN=partner-x.example", "the subject stands");
+        assert_eq!(claim.value, "CN=party-x.example", "the subject stands");
         assert!(claim.evidence.contains(&(
             evidence::PRINCIPAL_USER.to_string(),
-            "Jane@partner-x.example".to_string()
+            "Jane@party-x.example".to_string()
         )));
     }
 
@@ -303,7 +300,7 @@ mod tests {
         let arrival = StreamArrival::new(
             &stream,
             Arriving::Scheduled,
-            "sftp://partner/out",
+            "sftp://party/out",
             &properties,
         );
 
