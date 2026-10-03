@@ -125,14 +125,10 @@ impl TransportIdentifier for Certificate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stream::Stream;
-    use xcore::{Established, Layer, StreamId};
+
+    use xcore::{Established, Layer};
 
     const CHAIN_PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
-
-    fn stream() -> Stream {
-        Stream::new(StreamId::new(1), b"<order/>".to_vec(), None)
-    }
 
     fn properties(with_chain: bool) -> Vec<(String, String)> {
         let mut properties = vec![
@@ -151,9 +147,8 @@ mod tests {
 
     #[test]
     fn a_peer_certificate_is_presented_by_its_subject_with_issuer_and_fingerprint_beside() {
-        let stream = stream();
         let properties = properties(false);
-        let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
+        let arrival = StreamArrival::new(Arriving::Pushed, "https://x/in", &properties);
 
         let claim = Certificate
             .identify(&arrival)
@@ -178,9 +173,8 @@ mod tests {
 
     #[test]
     fn the_chain_rides_as_proof_and_never_as_evidence() {
-        let stream = stream();
         let properties = properties(true);
-        let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
+        let arrival = StreamArrival::new(Arriving::Pushed, "https://x/in", &properties);
 
         let claim = Certificate
             .identify(&arrival)
@@ -198,10 +192,9 @@ mod tests {
 
     #[test]
     fn a_chain_the_handshake_verified_is_mutual_tls_with_the_transports_word_as_proof() {
-        let stream = stream();
         let mut properties = properties(true);
         properties.push((TLS_PEER_VERIFIED.to_string(), "verified".to_string()));
-        let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
+        let arrival = StreamArrival::new(Arriving::Pushed, "https://x/in", &properties);
 
         let claim = Certificate
             .identify(&arrival)
@@ -219,10 +212,9 @@ mod tests {
 
     #[test]
     fn a_smart_card_certificates_principal_name_is_written_in_canonical_form() {
-        let stream = stream();
         let mut properties = properties(false);
         properties.push((TLS_PEER_UPN.to_string(), "Jane@Party-X.Example".to_string()));
-        let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
+        let arrival = StreamArrival::new(Arriving::Pushed, "https://x/in", &properties);
 
         let claim = Certificate
             .identify(&arrival)
@@ -238,14 +230,12 @@ mod tests {
 
     #[test]
     fn an_alternative_name_that_is_not_a_principal_name_and_a_subject_add_no_such_evidence() {
-        let stream = stream();
         let plain = properties(false);
         let mut bare = properties(false);
         bare.push((TLS_PEER_UPN.to_string(), "jane".to_string()));
 
         for properties in [plain, bare] {
-            let arrival =
-                StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
+            let arrival = StreamArrival::new(Arriving::Pushed, "https://x/in", &properties);
 
             let claim = Certificate
                 .identify(&arrival)
@@ -263,19 +253,17 @@ mod tests {
 
     #[test]
     fn an_arrival_without_a_peer_certificate_presents_nothing() {
-        let stream = stream();
         let properties = [("http.header.host".to_string(), "x".to_string())];
-        let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
+        let arrival = StreamArrival::new(Arriving::Pushed, "https://x/in", &properties);
 
         assert!(Certificate.identify(&arrival).expect("read").is_none());
     }
 
     #[test]
     fn a_chain_that_is_not_pem_is_an_error_naming_why() {
-        let stream = stream();
         let mut properties = properties(false);
         properties.push((TLS_PEER_CHAIN.to_string(), "MIIB".to_string()));
-        let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
+        let arrival = StreamArrival::new(Arriving::Pushed, "https://x/in", &properties);
 
         let failure = Certificate.identify(&arrival).expect_err("not PEM");
 
@@ -284,9 +272,8 @@ mod tests {
 
     #[test]
     fn a_certificate_reported_without_its_subject_is_an_error_and_not_an_absence() {
-        let stream = stream();
         let properties = [(TLS_PEER_FINGERPRINT.to_string(), "SHA256:ab12".to_string())];
-        let arrival = StreamArrival::new(&stream, Arriving::Pushed, "https://x/in", &properties);
+        let arrival = StreamArrival::new(Arriving::Pushed, "https://x/in", &properties);
 
         let failure = Certificate.identify(&arrival).expect_err("no subject");
 
@@ -295,14 +282,8 @@ mod tests {
 
     #[test]
     fn a_scheduled_pickup_presents_nothing_because_the_certificate_was_xmips_own() {
-        let stream = stream();
         let properties = properties(true);
-        let arrival = StreamArrival::new(
-            &stream,
-            Arriving::Scheduled,
-            "sftp://party/out",
-            &properties,
-        );
+        let arrival = StreamArrival::new(Arriving::Scheduled, "sftp://party/out", &properties);
 
         assert!(Certificate.identify(&arrival).expect("read").is_none());
     }
