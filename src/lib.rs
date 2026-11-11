@@ -8,8 +8,8 @@
 //! the claim: the subject distinguished name is the value, the issuer and the
 //! fingerprint ride beside it as evidence, and the chain the peer sent, where
 //! the transport kept it, rides as proof for the second gate. Whether that
-//! chain reaches a trust anchor is `authenticate/certificate`'s question, and
-//! nothing here answers it.
+//! chain reaches a trust anchor, and whether its sender holds the key, is
+//! `authenticate/certificate`'s question, and nothing here answers it.
 //!
 //! The transport vocabulary this reads, promoted onto the arrival by any
 //! transport that terminates TLS:
@@ -28,7 +28,13 @@
 //! transport says so in `tls.peer.verified`, the claim is `mutual-tls` and
 //! its proof is the transport's word; where the certificate merely arrived,
 //! the claim is `certificate` and its proof is the chain for the second gate
-//! to walk (ADR-0033 clause 1, amended 2026-09-18).
+//! to walk (ADR-0033 clause 1, amended 2026-09-18). A chain alone proves
+//! nobody: `authenticate/certificate` proves a `certificate` claim only with
+//! the sender's signature over this arrival, which no `tls.peer.*` property
+//! carries, so every `certificate` claim this reads is refused there until a
+//! transport reports that possession (ADR-0019, amendment 2026-11-11). A
+//! peer whose handshake proved it holds the key is `mutual-tls`, which is
+//! not refused.
 //!
 //! A smart-card certificate carries a user principal name as a subjectAltName
 //! otherName, OID 1.3.6.1.4.1.311.20.2.3. This crate parses no X.509: the
