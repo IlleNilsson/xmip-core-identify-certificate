@@ -10,11 +10,6 @@ this arrival, which no `tls.peer.*` property carries, so every
 `certificate` claim read here is refused there until a transport reports
 that possession (ADR-0019, amendment 2026-11-11).
 
-## Toolchain
-
-`rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it
-here.
-
 ## Verification
 
 The included workflow is manual-only and calls the versioned shared workflow at
